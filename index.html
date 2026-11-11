@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kuesioner Pakar AHP & Weighted Overlay - Peternakan Sapi</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased min-h-screen flex flex-col">
+
+    <!-- HEADER -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center font-black text-white text-xl shadow-md">
+                    AHP
+                </div>
+                <div>
+                    <h1 class="text-base font-bold text-slate-900 leading-tight">
+                        Kuesioner Pakar Kesesuaian Lahan Peternakan Sapi
+                    </h1>
+                    <p class="text-xs text-slate-500">
+                        Pemodelan Spasial AHP & Weighted Overlay dengan Constraint Kawasan Hutan
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                <i data-lucide="lock" class="w-4 h-4 text-emerald-600"></i>
+                Hasil hanya dapat diakses administrator
+            </div>
+        </div>
+
+        <div class="bg-slate-50 border-t border-slate-200 py-2">
+            <div class="max-w-3xl mx-auto px-4 flex items-center justify-between text-xs">
+                <div id="stepIndicator1" class="flex items-center gap-2 text-emerald-700 font-bold">
+                    <span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] bg-emerald-600 text-white font-bold">1</span>
+                    Pengisian Kuesioner (Biodata & 21 Perbandingan AHP)
+                </div>
+                <div class="h-0.5 w-16 bg-slate-200"></div>
+                <div id="stepIndicator2" class="flex items-center gap-2 text-slate-400">
+                    <span class="w-5 h-5 rounded-full flex items-center justify-center text-[10px] bg-slate-200 text-slate-500">2</span>
+                    Selesai / Terkirim
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- MAIN APP CONTAINER -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6" id="mainContainer">
+        <!-- Konten akan dirender secara dinamis oleh JavaScript -->
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
+        Sistem Kuesioner Pakar AHP Kesesuaian Lahan Peternakan Sapi &copy; 2026 | Data dikirim ke penyimpanan penelitian
+    </footer>
+
+    <!-- JAVASCRIPT AHP LOGIC -->
+    <script>
+        // WAJIB: tempel URL Web App Google Apps Script setelah deployment.
+        // URL ini bukan password; akses spreadsheet tetap dibatasi melalui izin Google Sheets.
+        const GOOGLE_APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwWttYuhmPCEzQkI3y7LEQWdvZIpyvk6jf3dPfHSgp4xu8aCVCZziYRnXs9GMkL7ShN/exec';
+
+        const PARAMETERS = [
+            { id: '1', name: 'Tutupan Lahan', desc: 'Hutan, pertanian, padang rumput, semak, permukiman' },
+            { id: '2', name: 'Kemiringan Lereng', desc: 'Persentase kemiringan lereng (%)' },
+            { id: '3', name: 'Karakteristik Tanah', desc: 'Tekstur, kedalaman efektif, drainase' },
+            { id: '4', name: 'Ketersediaan Air', desc: 'Jarak terhadap sungai, mata air, dan danau' },
+            { id: '5', name: 'Kerapatan Vegetasi', desc: 'Indeks vegetasi pakan (NDVI/EVI)' },
+            { id: '6', name: 'Curah Hujan', desc: 'Rata-rata curah hujan tahunan (mm/tahun)' },
+            { id: '7', name: 'Aksesibilitas Jalan', desc: 'Jarak terhadap jaringan jalan utama/lokal' }
+        ];
+
+        const INITIAL_ANSWERS = {
+            '1-2': 1, '1-3': 1, '1-4': 1, '1-5': 1, '1-6': 1, '1-7': 1,
+            '2-3': 1, '2-4': 1, '2-5': 1, '2-6': 1, '2-7': 1,
+            '3-4': 1, '3-5': 1, '3-6': 1, '3-7': 1,
+            '4-5': 1, '4-6': 1, '4-7': 1,
+            '5-6': 1, '5-7': 1,
+            '6-7': 1
+        };
+
+        const PAIRS = [];
+        for (let i = 0; i < PARAMETERS.length; i++) {
+            for (let j = i + 1; j < PARAMETERS.length; j++) {
+                PAIRS.push({
+                    key: `${PARAMETERS[i].id}-${PARAMETERS[j].id}`,
+                    p1: PARAMETERS[i],
+                    p2: PARAMETERS[j]
+                });
+            }
+        }
+
+        const RI_7 = 1.32;
+
+        // App State
+        let currentStep = 1; // 1: Form, 3: Success, 4: Admin
+        let isAdminLoggedIn = false;
+        let selectedResponseIndex = 0;
+        let bioData = { name: '', institution: '', expertise: '' };
+        let currentAnswers = { ...INITIAL_ANSWERS };
+
+        // Tidak ada data contoh. Setiap jawaban nyata dikirim ke Google Sheets.
+        let submittedResponses = [];
+
+        function calculateAhp(ans) {
+            const n = PARAMETERS.length;
+            const matrix = Array(n).fill(0).map(() => Array(n).fill(1));
+
+            PAIRS.forEach(pair => {
+                const p1Idx = parseInt(pair.p1.id) - 1;
+                const p2Idx = parseInt(pair.p2.id) - 1;
+                const val = ans[pair.key] || 1;
+                matrix[p1Idx][p2Idx] = val;
+                matrix[p2Idx][p1Idx] = 1 / val;
+            });
+
+            const colSums = Array(n).fill(0);
+            for (let j = 0; j < n; j++) {
+                for (let i = 0; i < n; i++) {
+                    colSums[j] += matrix[i][j];
+                }
+            }
+
+            const weights = Array(n).fill(0);
+            for (let i = 0; i < n; i++) {
+                let rowSum = 0;
+                for (let j = 0; j < n; j++) {
+                    rowSum += matrix[i][j] / colSums[j];
+                }
+                weights[i] = rowSum / n;
+            }
+
+            let lambdaMax = 0;
+            for (let i = 0; i < n; i++) {
+                let rowWeightedSum = 0;
+                for (let j = 0; j < n; j++) {
+                    rowWeightedSum += matrix[i][j] * weights[j];
+                }
+                lambdaMax += rowWeightedSum / weights[i];
+            }
+            lambdaMax /= n;
+
+            const CI = (lambdaMax - n) / (n - 1);
+            const CR = CI / RI_7;
+            const isConsistent = CR <= 0.10;
+
+            const weightObj = {};
+            const chartData = PARAMETERS.map((p, idx) => {
+                const wDec = weights[idx];
+                const wPct = (wDec * 100).toFixed(2);
+                weightObj[p.id] = { dec: wDec.toFixed(4), pct: wPct };
+                return {
+                    id: p.id,
+                    name: p.name,
+                    fullName: `${p.name} (${p.desc})`,
+                    weightDec: wDec.toFixed(4),
+                    weightPct: parseFloat(wPct)
+                };
+            }).sort((a, b) => b.weightPct - a.weightPct);
+
+            return { matrix, weights: weightObj, chartData, lambdaMax, CI, CR, isConsistent };
+        }
+
+        function render() {
+            const container = document.getElementById('mainContainer');
+            const step1Ind = document.getElementById('stepIndicator1');
+            const step2Ind = document.getElementById('stepIndicator2');
+
+            if (currentStep === 1) {
+                step1Ind.className = 'flex items-center gap-2 text-emerald-700 font-bold';
+                step1Ind.children[0].className = 'w-5 h-5 rounded-full flex items-center justify-center text-[10px] bg-emerald-600 text-white font-bold';
+                step2Ind.className = 'flex items-center gap-2 text-slate-400';
+                step2Ind.children[0].className = 'w-5 h-5 rounded-full flex items-center justify-center text-[10px] bg-slate-200 text-slate-500';
+
+                let html = `
+                    <form onsubmit="handleFormSubmit(event)" class="max-w-4xl mx-auto space-y-6">
+                        <div class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
+                            <div class="flex items-center gap-3 border-b border-slate-100 pb-4 mb-6">
+                                <div class="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
+                                    <i data-lucide="user" class="w-6 h-6"></i>
+                                </div>
+                                <div>
+                                    <h2 class="text-lg font-bold text-slate-900">Bagian I: Profil Responden / Pakar</h2>
+                                    <p class="text-xs text-slate-500">Silakan lengkapi data diri Anda sebelum mengisi perbandingan AHP</p>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-700 mb-1">Nama Lengkap & Gelar *</label>
+                                    <input type="text" required id="bioName" value="${bioData.name}" oninput="bioData.name=this.value" placeholder="Dr. Ir. Budi Santoso, M.Sc." class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-600">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-700 mb-1">Instansi / Lembaga</label>
+                                    <input type="text" id="bioInst" value="${bioData.institution}" oninput="bioData.institution=this.value" placeholder="Fakultas Peternakan UGM" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-600">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-semibold text-slate-700 mb-1">Bidang Keahlian Utama</label>
+                                    <input type="text" id="bioExp" value="${bioData.expertise}" oninput="bioData.expertise=this.value" placeholder="SIG & Daya Dukung Pakan" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-emerald-600">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                            <h2 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="layers" class="w-5 h-5 text-emerald-600"></i> Bagian II: 21 Perbandingan Berpasangan Parameter Biofisik
+                            </h2>
+                            <p class="text-xs text-slate-500 mt-0.5">Gunakan skala Saaty (1-9, termasuk angka genap 2, 4, 6, 8).</p>
+                        </div>
+                `;
+
+                PAIRS.forEach((pair, idx) => {
+                    const curVal = currentAnswers[pair.key] || 1;
+                    html += `
+                        <div class="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                            <div class="text-xs font-bold text-slate-500 mb-3 border-b border-slate-100 pb-2">Pertanyaan #${idx + 1} dari 21</div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                                <div class="p-3 rounded-xl border ${curVal > 1 ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200'}">
+                                    <div class="font-bold text-sm text-slate-900">${pair.p1.name}</div>
+                                    <div class="text-xs text-slate-600">${pair.p1.desc}</div>
+                                </div>
+                                <div class="p-3 rounded-xl border ${curVal < 1 ? 'bg-emerald-50 border-emerald-300' : 'bg-slate-50 border-slate-200'}">
+                                    <div class="font-bold text-sm text-slate-900">${pair.p2.name}</div>
+                                    <div class="text-xs text-slate-600">${pair.p2.desc}</div>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-center gap-1 overflow-x-auto py-1">
+                    `;
+
+                    [9, 8, 7, 6, 5, 4, 3, 2].forEach(num => {
+                        const active = curVal === num;
+                        html += `<button type="button" onclick="setPairAnswer('${pair.key}', ${num})" class="px-2 py-1.5 min-w-[32px] rounded-lg text-xs font-bold border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-700'}">${num}</button>`;
+                    });
+
+                    html += `<button type="button" onclick="setPairAnswer('${pair.key}', 1)" class="px-3 py-1.5 rounded-lg text-xs font-bold border ${curVal === 1 ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-700'}">1</button>`;
+
+                    [2, 3, 4, 5, 6, 7, 8, 9].forEach(num => {
+                        const active = Math.abs(curVal - (1 / num)) < 0.01;
+                        html += `<button type="button" onclick="setPairAnswer('${pair.key}', ${1 / num})" class="px-2 py-1.5 min-w-[32px] rounded-lg text-xs font-bold border ${active ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-slate-50 border-slate-200 text-slate-700'}">${num}</button>`;
+                    });
+
+                    html += `</div></div>`;
+                });
+
+                html += `
+                        <button type="submit" class="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-base rounded-2xl shadow-lg transition flex items-center justify-center gap-2">
+                            Kirim Kuesioner Pakar Lengkap <i data-lucide="check-circle-2" class="w-5 h-5"></i>
+                        </button>
+                    </form>
+                `;
+                container.innerHTML = html;
+            } else if (currentStep === 3) {
+                container.innerHTML = `
+                    <div class="max-w-xl mx-auto bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-lg my-8">
+                        <div class="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 border border-emerald-200">
+                            <i data-lucide="check-circle-2" class="w-10 h-10"></i>
+                        </div>
+                        <h2 class="text-xl font-bold text-slate-900 mb-2">Terima Kasih atas Partisipasi Anda!</h2>
+                        <p class="text-xs text-slate-600 mb-6">Pengiriman jawaban telah dilakukan. Administrator akan memeriksa penerimaan data pada sistem penyimpanan penelitian.</p>
+                        <button onclick="resetSurvey()" class="px-6 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border">
+                            Isi Form Responden Lain
+                        </button>
+                    </div>
+                `;
+            } else if (currentStep === 4 && isAdminLoggedIn) {
+                const activeSub = submittedResponses[selectedResponseIndex] || submittedResponses[0];
+                const ahpRes = calculateAhp(activeSub.answers);
+
+                let html = `
+                    <div class="space-y-6">
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row items-center justify-between gap-4">
+                            <div>
+                                <h2 class="text-lg font-extrabold text-slate-900">Dashboard Analisis Matriks & Bobot AHP (Admin)</h2>
+                                <p class="text-slate-500 text-xs">Total Tanggapan: ${submittedResponses.length} Pakar</p>
+                            </div>
+                            <div class="flex gap-2">
+                                
+                                <button onclick="exportExcel()" class="px-3.5 py-2 text-xs font-bold rounded-xl bg-emerald-600 text-white flex items-center gap-1.5"><i data-lucide="file-spreadsheet" class="w-3.5 h-3.5"></i> Export Excel (.xls)</button>
+                            </div>
+                        </div>
+
+                        <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm overflow-x-auto">
+                            <h3 class="text-sm font-bold text-slate-900 mb-3">Daftar Tanggapan Pakar</h3>
+                            <table class="w-full text-left text-xs">
+                                <thead>
+                                    <tr class="bg-slate-100 text-slate-700 border-b">
+                                        <th class="p-3 text-center">No</th>
+                                        <th class="p-3">Nama Pakar</th>
+                                        <th class="p-3">Instansi</th>
+                                        <th class="p-3">Keahlian</th>
+                                        <th class="p-3 text-center">Waktu</th>
+                                        <th class="p-3 text-center">CR</th>
+                                        <th class="p-3 text-center">Status</th>
+                                        <th class="p-3 text-center">Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                `;
+
+                submittedResponses.forEach((sub, idx) => {
+                    const res = calculateAhp(sub.answers);
+                    const isSelected = selectedResponseIndex === idx;
+                    html += `
+                        <tr onclick="setSelectedResponse(${idx})" class="cursor-pointer ${isSelected ? 'bg-emerald-50' : 'hover:bg-slate-50'}">
+                            <td class="p-3 text-center">${idx + 1}</td>
+                            <td class="p-3 font-semibold text-slate-900">${sub.bio.name}</td>
+                            <td class="p-3">${sub.bio.institution || '-'}</td>
+                            <td class="p-3">${sub.bio.expertise || '-'}</td>
+                            <td class="p-3 text-center">${sub.timestamp}</td>
+                            <td class="p-3 text-center font-mono font-bold">${res.CR.toFixed(4)}</td>
+                            <td class="p-3 text-center">
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${res.isConsistent ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}">
+                                    ${res.isConsistent ? 'KONSISTEN' : 'TIDAK'}
+                                </span>
+                            </td>
+                            <td class="p-3 text-center">
+                                <button onclick="deleteResponse('${sub.id}', event)" class="p-1 rounded bg-rose-50 text-rose-600"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                html += `
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div class="bg-white border rounded-2xl p-5 shadow-sm">
+                                <span class="text-xs text-slate-500">Rasio Konsistensi (CR)</span>
+                                <div class="text-2xl font-extrabold font-mono mt-1">${ahpRes.CR.toFixed(4)}</div>
+                            </div>
+                            <div class="bg-white border rounded-2xl p-5 shadow-sm">
+                                <span class="text-xs text-slate-500">Status Uji</span>
+                                <div class="mt-1 font-bold text-xs">${ahpRes.isConsistent ? '<span class="text-emerald-700">MEMENUHI SYARAT (≤ 0.10)</span>' : '<span class="text-rose-600">TIDAK KONSISTEN</span>'}</div>
+                            </div>
+                            <div class="bg-white border rounded-2xl p-5 shadow-sm">
+                                <span class="text-xs text-slate-500">Indeks Konsistensi (CI)</span>
+                                <div class="text-2xl font-extrabold font-mono mt-1">${ahpRes.CI.toFixed(4)}</div>
+                            </div>
+                            <div class="bg-white border rounded-2xl p-5 shadow-sm">
+                                <span class="text-xs text-slate-500">Lambda Max (λmax)</span>
+                                <div class="text-2xl font-extrabold font-mono mt-1">${ahpRes.lambdaMax.toFixed(4)}</div>
+                            </div>
+                        </div>
+
+                        <div class="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
+                            <h3 class="text-sm font-bold text-slate-900 mb-1 flex items-center gap-2">
+                                <i data-lucide="bar-chart-3" class="w-4 h-4 text-emerald-600"></i> Distribusi Bobot Prioritas (%)
+                            </h3>
+                            <div class="space-y-3 mt-4">
+                `;
+
+                ahpRes.chartData.forEach((item, idx) => {
+                    html += `
+                        <div class="space-y-1">
+                            <div class="flex justify-between text-xs font-semibold">
+                                <span class="text-slate-800">#${idx + 1}. ${item.name}</span>
+                                <span class="text-emerald-700 font-mono font-bold">${item.weightPct}%</span>
+                            </div>
+                            <div class="w-full bg-slate-100 rounded-full h-3 overflow-hidden">
+                                <div class="bg-emerald-600 h-3 rounded-full" style="width: ${item.weightPct}%"></div>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                html += `</div></div></div>`;
+                container.innerHTML = html;
+            }
+
+            if (window.lucide) {
+                window.lucide.createIcons();
+            }
+        }
+
+        function setPairAnswer(key, val) {
+            currentAnswers[key] = val;
+            render();
+        }
+
+        async function handleFormSubmit(e) {
+            e.preventDefault();
+            if (!bioData.name.trim()) {
+                alert('Mohon isi Nama Lengkap & Gelar Anda.');
+                return;
+            }
+            if (!GOOGLE_APPS_SCRIPT_URL.startsWith('https://script.google.com/macros/s/')) {
+                alert('Koneksi Google Sheets belum dikonfigurasi. Silakan hubungi administrator penelitian.');
+                return;
+            }
+
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const originalText = submitBtn ? submitBtn.innerHTML : '';
+            if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Mengirim jawaban...'; }
+
+            const ahp = calculateAhp(currentAnswers);
+            const newEntry = {
+                id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : Date.now().toString(),
+                bio: { ...bioData },
+                timestamp: new Date().toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }),
+                answers: { ...currentAnswers },
+                ahp: { lambdaMax: ahp.lambdaMax, CI: ahp.CI, CR: ahp.CR, isConsistent: ahp.isConsistent }
+            };
+
+            try {
+                // text/plain + no-cors menghindari preflight CORS pada Google Apps Script.
+                // Respons bersifat opaque, sehingga keberhasilan akhir perlu diverifikasi di Sheet admin.
+                await fetch(GOOGLE_APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(newEntry)
+                });
+                submittedResponses.unshift(newEntry);
+                selectedResponseIndex = 0;
+                currentStep = 3;
+                render();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            } catch (error) {
+                console.error('Pengiriman kuesioner gagal:', error);
+                alert('Jawaban belum dapat dikirim. Periksa koneksi internet, lalu coba kembali.');
+                if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = originalText; }
+            }
+        }
+
+        function resetSurvey() {
+            bioData = { name: '', institution: '', expertise: '' };
+            currentAnswers = { ...INITIAL_ANSWERS };
+            currentStep = 1;
+            render();
+        }
+
+        function loadSampleData() {
+            submittedResponses.unshift({
+                id: Date.now().toString(),
+                bio: { name: `Pakar Sampel #${submittedResponses.length + 1}`, institution: 'BRIN', expertise: 'Spasial & Lingkungan' },
+                timestamp: new Date().toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' }),
+                answers: { ...INITIAL_ANSWERS }
+            });
+            render();
+        }
+
+        function deleteResponse(id, e) {
+            e.stopPropagation();
+            submittedResponses = submittedResponses.filter(item => item.id !== id);
+            if (selectedResponseIndex >= submittedResponses.length) {
+                selectedResponseIndex = Math.max(0, submittedResponses.length - 1);
+            }
+            render();
+        }
+
+        function setSelectedResponse(idx) {
+            selectedResponseIndex = idx;
+            render();
+        }
+
+
+
+        function exportExcel() {
+            let htmlContent = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"></head><body><table border="1">`;
+            htmlContent += `<tr><th colspan="7">REKAPITULASI AHP KESESUAIAN LAHAN PETERNAKAN SAPI</th></tr>`;
+            htmlContent += `<tr><th>No</th><th>Nama Pakar</th><th>Instansi</th><th>Bidang Keahlian</th><th>Waktu</th><th>CR</th><th>Status</th></tr>`;
+            submittedResponses.forEach((sub, idx) => {
+                const ahp = calculateAhp(sub.answers);
+                htmlContent += `<tr><td>${idx+1}</td><td>${sub.bio.name}</td><td>${sub.bio.institution}</td><td>${sub.bio.expertise}</td><td>${sub.timestamp}</td><td>${ahp.CR.toFixed(4)}</td><td>${ahp.isConsistent ? 'KONSISTEN' : 'TIDAK'}</td></tr>`;
+            });
+            htmlContent += `</table></body></html>`;
+            const blob = new Blob([htmlContent], { type: 'application/vnd.ms-excel' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `rekap_ahp_peternakan_${new Date().toISOString().slice(0,10)}.xls`;
+            link.click();
+        }
+
+        // Inisialisasi awal saat halaman dimuat
+        window.onload = function() {
+            render();
+        };
+    </script>
+</body>
+</html>
